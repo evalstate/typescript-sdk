@@ -60,6 +60,67 @@ export interface EventStore {
 }
 
 /**
+ * Session state that can be persisted externally for serverless deployments.
+ */
+export interface SessionState {
+    /** Whether the session has completed initialization */
+    initialized: boolean;
+    /** The negotiated protocol version */
+    protocolVersion: string;
+    /** Timestamp when the session was created */
+    createdAt: number;
+}
+
+/**
+ * Interface for session storage in distributed/serverless deployments.
+ *
+ * In serverless environments (Lambda, Vercel, Cloudflare Workers), each request
+ * may be handled by a different instance with no shared memory. The SessionStore
+ * allows session state to be persisted externally (e.g., Redis, DynamoDB, KV).
+ *
+ * @example
+ * ```typescript
+ * // Cloudflare KV implementation
+ * class KVSessionStore implements SessionStore {
+ *   constructor(private kv: KVNamespace) {}
+ *
+ *   async get(sessionId: string) {
+ *     return this.kv.get(`session:${sessionId}`, 'json');
+ *   }
+ *   async save(sessionId: string, state: SessionState) {
+ *     await this.kv.put(`session:${sessionId}`, JSON.stringify(state), { expirationTtl: 3600 });
+ *   }
+ *   async delete(sessionId: string) {
+ *     await this.kv.delete(`session:${sessionId}`);
+ *   }
+ * }
+ * ```
+ */
+export interface SessionStore {
+    /**
+     * Retrieve session state by ID.
+     * @param sessionId The session ID to look up
+     * @returns The session state, or undefined if not found
+     */
+    get(sessionId: string): Promise<SessionState | undefined>;
+
+    /**
+     * Save session state.
+     * Called when a session is initialized or updated.
+     * @param sessionId The session ID
+     * @param state The session state to persist
+     */
+    save(sessionId: string, state: SessionState): Promise<void>;
+
+    /**
+     * Delete session state.
+     * Called when a session is explicitly closed via DELETE request.
+     * @param sessionId The session ID to delete
+     */
+    delete(sessionId: string): Promise<void>;
+}
+
+/**
  * Internal stream mapping for managing SSE connections
  */
 interface StreamMapping {
@@ -143,6 +204,29 @@ export interface FetchStreamableHTTPServerTransportOptions {
      * client reconnection timing for polling behavior.
      */
     retryInterval?: number;
+
+    /**
+     * Session store for distributed/serverless deployments.
+     *
+     * When provided, session state will be persisted externally, allowing the transport
+     * to work across multiple serverless function invocations or instances.
+     *
+     * If not provided, session state is kept in-memory (single-instance mode).
+     *
+     * @example
+     * ```typescript
+     * // Redis session store
+     * const transport = new FetchStreamableHTTPServerTransport({
+     *   sessionIdGenerator: () => crypto.randomUUID(),
+     *   sessionStore: {
+     *     get: async (id) => redis.get(`session:${id}`),
+     *     save: async (id, state) => redis.set(`session:${id}`, state, 'EX', 3600),
+     *     delete: async (id) => redis.del(`session:${id}`)
+     *   }
+     * });
+     * ```
+     */
+    sessionStore?: SessionStore;
 }
 
 /**
@@ -208,6 +292,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
     private _allowedOrigins?: string[];
     private _enableDnsRebindingProtection: boolean;
     private _retryInterval?: number;
+    private _sessionStore?: SessionStore;
 
     sessionId?: string;
     onclose?: () => void;
@@ -224,6 +309,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         this._allowedOrigins = options.allowedOrigins;
         this._enableDnsRebindingProtection = options.enableDnsRebindingProtection ?? false;
         this._retryInterval = options.retryInterval;
+        this._sessionStore = options.sessionStore;
     }
 
     /**
@@ -348,7 +434,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         // If an Mcp-Session-Id is returned by the server during initialization,
         // clients using the Streamable HTTP transport MUST include it
         // in the Mcp-Session-Id header on all of their subsequent HTTP requests.
-        const sessionError = this.validateSession(req);
+        const sessionError = await this.validateSession(req);
         if (sessionError) {
             return sessionError;
         }
@@ -603,6 +689,16 @@ export class FetchStreamableHTTPServerTransport implements Transport {
                 this.sessionId = this.sessionIdGenerator?.();
                 this._initialized = true;
 
+                // Persist session state to external store if configured
+                if (this.sessionId && this._sessionStore) {
+                    const protocolVersion = req.headers.get('mcp-protocol-version') ?? DEFAULT_NEGOTIATED_PROTOCOL_VERSION;
+                    await this._sessionStore.save(this.sessionId, {
+                        initialized: true,
+                        protocolVersion,
+                        createdAt: Date.now()
+                    });
+                }
+
                 // If we have a session ID and an onsessioninitialized handler, call it immediately
                 // This is needed in cases where the server needs to keep track of multiple sessions
                 if (this.sessionId && this._onsessioninitialized) {
@@ -613,7 +709,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
                 // If an Mcp-Session-Id is returned by the server during initialization,
                 // clients using the Streamable HTTP transport MUST include it
                 // in the Mcp-Session-Id header on all of their subsequent HTTP requests.
-                const sessionError = this.validateSession(req);
+                const sessionError = await this.validateSession(req);
                 if (sessionError) {
                     return sessionError;
                 }
@@ -740,7 +836,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
      * Handles DELETE requests to terminate sessions
      */
     private async handleDeleteRequest(req: Request): Promise<Response> {
-        const sessionError = this.validateSession(req);
+        const sessionError = await this.validateSession(req);
         if (sessionError) {
             return sessionError;
         }
@@ -748,24 +844,27 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         if (protocolError) {
             return protocolError;
         }
+
+        // Delete session from external store if configured
+        if (this.sessionId && this._sessionStore) {
+            await this._sessionStore.delete(this.sessionId);
+        }
+
         await Promise.resolve(this._onsessionclosed?.(this.sessionId!));
         await this.close();
         return new Response(null, { status: 200 });
     }
 
     /**
-     * Validates session ID for non-initialization requests
+     * Validates session ID for non-initialization requests.
+     * In serverless mode with sessionStore, this will hydrate session state from the store.
      * Returns Response error if invalid, undefined otherwise
      */
-    private validateSession(req: Request): Response | undefined {
+    private async validateSession(req: Request): Promise<Response | undefined> {
         if (this.sessionIdGenerator === undefined) {
             // If the sessionIdGenerator ID is not set, the session management is disabled
             // and we don't need to validate the session ID
             return undefined;
-        }
-        if (!this._initialized) {
-            // If the server has not been initialized yet, reject all requests
-            return this.createJsonErrorResponse(400, -32000, 'Bad Request: Server not initialized');
         }
 
         const sessionId = req.headers.get('mcp-session-id');
@@ -773,7 +872,29 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         if (!sessionId) {
             // Non-initialization requests without a session ID should return 400 Bad Request
             return this.createJsonErrorResponse(400, -32000, 'Bad Request: Mcp-Session-Id header is required');
-        } else if (sessionId !== this.sessionId) {
+        }
+
+        // If sessionStore is configured, try to hydrate session from external store
+        // This enables serverless mode where each request may be on a fresh instance
+        if (this._sessionStore) {
+            const sessionState = await this._sessionStore.get(sessionId);
+            if (sessionState && sessionState.initialized) {
+                // Hydrate this transport instance with the session state
+                this.sessionId = sessionId;
+                this._initialized = true;
+                return undefined;
+            }
+            // Session not found in store
+            return this.createJsonErrorResponse(404, -32001, 'Session not found');
+        }
+
+        // In-memory mode: check local state
+        if (!this._initialized) {
+            // If the server has not been initialized yet, reject all requests
+            return this.createJsonErrorResponse(400, -32000, 'Bad Request: Server not initialized');
+        }
+
+        if (sessionId !== this.sessionId) {
             // Reject requests with invalid session ID with 404 Not Found
             return this.createJsonErrorResponse(404, -32001, 'Session not found');
         }

@@ -12,7 +12,9 @@ import {
     EventStore,
     EventId,
     StreamId,
-    AuthenticatedRequest
+    AuthenticatedRequest,
+    SessionStore,
+    SessionState
 } from './fetchStreamableHttpServerTransport.js';
 import { McpServer } from '../../server/mcp.js';
 import { CallToolResult, JSONRPCMessage } from '../../types.js';
@@ -130,6 +132,7 @@ interface TestServerConfig {
     sessionIdGenerator: (() => string) | undefined;
     enableJsonResponse?: boolean;
     eventStore?: EventStore;
+    sessionStore?: SessionStore;
     onsessioninitialized?: (sessionId: string) => void | Promise<void>;
     onsessionclosed?: (sessionId: string) => void | Promise<void>;
     retryInterval?: number;
@@ -250,6 +253,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
             sessionIdGenerator: config.sessionIdGenerator,
             enableJsonResponse: config.enableJsonResponse ?? false,
             eventStore: config.eventStore,
+            sessionStore: config.sessionStore,
             onsessioninitialized: config.onsessioninitialized,
             onsessionclosed: config.onsessionclosed,
             retryInterval: config.retryInterval,
@@ -2229,6 +2233,264 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
                 expect(response2.status).toBe(200);
             });
+        });
+    });
+
+    /**
+     * Tests for SessionStore functionality (distributed/serverless mode)
+     */
+    describe('FetchStreamableHTTPServerTransport with SessionStore', () => {
+        let server: Server;
+        let transport: FetchStreamableHTTPServerTransport;
+        let baseUrl: URL;
+
+        afterEach(async () => {
+            if (server && transport) {
+                await stopTestServer({ server, transport });
+            }
+        });
+
+        /**
+         * Creates an in-memory session store for testing
+         */
+        function createInMemorySessionStore(): SessionStore & { sessions: Map<string, SessionState> } {
+            const sessions = new Map<string, SessionState>();
+            return {
+                sessions,
+                get: async (sessionId: string) => sessions.get(sessionId),
+                save: async (sessionId: string, state: SessionState) => {
+                    sessions.set(sessionId, state);
+                },
+                delete: async (sessionId: string) => {
+                    sessions.delete(sessionId);
+                }
+            };
+        }
+
+        it('should save session state to store on initialization', async () => {
+            const sessionStore = createInMemorySessionStore();
+            const result = await createTestServer({
+                sessionIdGenerator: () => 'test-session-123',
+                sessionStore
+            });
+            server = result.server;
+            transport = result.transport;
+            baseUrl = result.baseUrl;
+
+            // Initialize the session
+            const response = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+
+            expect(response.status).toBe(200);
+
+            // Verify session was saved to store
+            const savedSession = await sessionStore.get('test-session-123');
+            expect(savedSession).toBeDefined();
+            expect(savedSession?.initialized).toBe(true);
+            expect(savedSession?.protocolVersion).toBeDefined();
+            expect(savedSession?.createdAt).toBeGreaterThan(0);
+        });
+
+        it('should validate session from store for subsequent requests', async () => {
+            const sessionStore = createInMemorySessionStore();
+            const result = await createTestServer({
+                sessionIdGenerator: () => 'test-session-456',
+                sessionStore
+            });
+            server = result.server;
+            transport = result.transport;
+            baseUrl = result.baseUrl;
+
+            // Initialize the session
+            const initResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+            expect(initResponse.status).toBe(200);
+            const sessionId = initResponse.headers.get('mcp-session-id');
+
+            // Make a subsequent request with valid session ID
+            const listResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    'mcp-session-id': sessionId!
+                },
+                body: JSON.stringify(TEST_MESSAGES.toolsList)
+            });
+            expect(listResponse.status).toBe(200);
+        });
+
+        it('should reject requests with invalid session ID when using session store', async () => {
+            const sessionStore = createInMemorySessionStore();
+            const result = await createTestServer({
+                sessionIdGenerator: () => 'test-session-789',
+                sessionStore
+            });
+            server = result.server;
+            transport = result.transport;
+            baseUrl = result.baseUrl;
+
+            // Initialize the session first
+            const initResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+            expect(initResponse.status).toBe(200);
+
+            // Try to make a request with invalid session ID
+            const response = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    'mcp-session-id': 'invalid-session-id'
+                },
+                body: JSON.stringify(TEST_MESSAGES.toolsList)
+            });
+
+            expect(response.status).toBe(404);
+            const body = await response.json();
+            expect(body.error.message).toBe('Session not found');
+        });
+
+        it('should delete session from store on DELETE request', async () => {
+            const sessionStore = createInMemorySessionStore();
+            const result = await createTestServer({
+                sessionIdGenerator: () => 'test-session-delete',
+                sessionStore
+            });
+            server = result.server;
+            transport = result.transport;
+            baseUrl = result.baseUrl;
+
+            // Initialize the session
+            const initResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+            expect(initResponse.status).toBe(200);
+            const sessionId = initResponse.headers.get('mcp-session-id');
+
+            // Verify session exists in store
+            expect(await sessionStore.get(sessionId!)).toBeDefined();
+
+            // Delete the session
+            const deleteResponse = await fetch(baseUrl, {
+                method: 'DELETE',
+                headers: {
+                    'mcp-session-id': sessionId!
+                }
+            });
+            expect(deleteResponse.status).toBe(200);
+
+            // Verify session was deleted from store
+            expect(await sessionStore.get(sessionId!)).toBeUndefined();
+        });
+
+        it('should allow new transport instances to validate existing sessions (serverless mode)', async () => {
+            // This test simulates serverless behavior where each request
+            // is handled by a fresh transport instance
+            const sessionStore = createInMemorySessionStore();
+
+            // First, initialize using one transport instance
+            const result1 = await createTestServer({
+                sessionIdGenerator: () => 'serverless-session-123',
+                sessionStore
+            });
+            server = result1.server;
+            transport = result1.transport;
+            baseUrl = result1.baseUrl;
+
+            const initResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+            expect(initResponse.status).toBe(200);
+            const sessionId = initResponse.headers.get('mcp-session-id');
+
+            // Stop the first server
+            await stopTestServer({ server, transport });
+
+            // Create a NEW transport instance with same sessionStore (simulates new serverless invocation)
+            const result2 = await createTestServer({
+                sessionIdGenerator: () => crypto.randomUUID(), // Different generator, doesn't matter
+                sessionStore // Same session store
+            });
+            server = result2.server;
+            transport = result2.transport;
+            baseUrl = result2.baseUrl;
+
+            // The new transport should be able to validate the existing session from the store
+            const listResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    'mcp-session-id': sessionId!
+                },
+                body: JSON.stringify(TEST_MESSAGES.toolsList)
+            });
+
+            expect(listResponse.status).toBe(200);
+        });
+
+        it('should work with GET SSE stream when session is hydrated from store', async () => {
+            const sessionStore = createInMemorySessionStore();
+            const result = await createTestServer({
+                sessionIdGenerator: () => 'sse-session-123',
+                sessionStore
+            });
+            server = result.server;
+            transport = result.transport;
+            baseUrl = result.baseUrl;
+
+            // Initialize session
+            const initResponse = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream'
+                },
+                body: JSON.stringify(TEST_MESSAGES.initialize)
+            });
+            expect(initResponse.status).toBe(200);
+            const sessionId = initResponse.headers.get('mcp-session-id');
+
+            // Open SSE stream with session ID
+            const sseResponse = await fetch(baseUrl, {
+                method: 'GET',
+                headers: {
+                    Accept: 'text/event-stream',
+                    'mcp-session-id': sessionId!
+                }
+            });
+
+            expect(sseResponse.status).toBe(200);
+            expect(sseResponse.headers.get('content-type')).toBe('text/event-stream');
         });
     });
 });
