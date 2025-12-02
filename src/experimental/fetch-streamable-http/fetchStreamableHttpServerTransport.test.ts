@@ -59,15 +59,11 @@ const TEST_MESSAGES = {
 /**
  * Creates a POST request for the transport
  */
-function createPostRequest(
-    message: JSONRPCMessage | JSONRPCMessage[],
-    sessionId?: string,
-    extraHeaders?: Record<string, string>
-): Request {
+function createPostRequest(message: JSONRPCMessage | JSONRPCMessage[], sessionId?: string, extraHeaders?: Record<string, string>): Request {
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'Host': 'localhost:3000'
+        Accept: 'application/json, text/event-stream',
+        Host: 'localhost:3000'
     };
 
     if (sessionId) {
@@ -92,8 +88,8 @@ function createPostRequest(
  */
 function createGetRequest(sessionId: string, extraHeaders?: Record<string, string>): Request {
     const headers: Record<string, string> = {
-        'Accept': 'text/event-stream',
-        'Host': 'localhost:3000',
+        Accept: 'text/event-stream',
+        Host: 'localhost:3000',
         'mcp-session-id': sessionId,
         ...extraHeaders
     };
@@ -109,7 +105,7 @@ function createGetRequest(sessionId: string, extraHeaders?: Record<string, strin
  */
 function createDeleteRequest(sessionId: string, extraHeaders?: Record<string, string>): Request {
     const headers: Record<string, string> = {
-        'Host': 'localhost:3000',
+        Host: 'localhost:3000',
         'mcp-session-id': sessionId,
         ...extraHeaders
     };
@@ -303,7 +299,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
         it('should pass request info to tool callback', async () => {
             // Create a new transport with a tool that captures request info
-            let capturedHeaders: Record<string, string> | undefined;
+            let capturedHeaders: Record<string, string | string[] | undefined> | undefined;
 
             const customMcpServer = new McpServer({ name: 'test-server', version: '1.0.0' }, { capabilities: { logging: {} } });
             customMcpServer.tool(
@@ -416,9 +412,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
             const request = new Request('http://localhost:3000/mcp', {
                 method: 'GET',
                 headers: {
-                    'Host': 'localhost:3000',
+                    Host: 'localhost:3000',
                     'mcp-session-id': sessionId,
-                    'Accept': 'application/json'
+                    Accept: 'application/json'
                 }
             });
 
@@ -431,8 +427,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Host': 'localhost:3000',
-                    'Accept': 'application/json' // Missing text/event-stream
+                    Host: 'localhost:3000',
+                    Accept: 'application/json' // Missing text/event-stream
                 },
                 body: JSON.stringify(TEST_MESSAGES.initialize)
             });
@@ -446,8 +442,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'text/plain',
-                    'Host': 'localhost:3000',
-                    'Accept': 'application/json, text/event-stream'
+                    Host: 'localhost:3000',
+                    Accept: 'application/json, text/event-stream'
                 },
                 body: 'not json'
             });
@@ -490,8 +486,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Host': 'localhost:3000',
-                    'Accept': 'application/json, text/event-stream'
+                    Host: 'localhost:3000',
+                    Accept: 'application/json, text/event-stream'
                 },
                 body: 'not valid json'
             });
@@ -508,8 +504,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Host': 'localhost:3000',
-                    'Accept': 'application/json, text/event-stream'
+                    Host: 'localhost:3000',
+                    Accept: 'application/json, text/event-stream'
                 },
                 body: JSON.stringify({ invalid: 'message' })
             });
@@ -597,8 +593,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000',
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000',
                         'mcp-session-id': sessionId
                     },
                     body: JSON.stringify(TEST_MESSAGES.toolsList)
@@ -639,8 +635,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 const request = new Request('http://localhost:3000/mcp', {
                     method: 'GET',
                     headers: {
-                        'Accept': 'text/event-stream',
-                        'Host': 'localhost:3000',
+                        Accept: 'text/event-stream',
+                        Host: 'localhost:3000',
                         'mcp-session-id': sessionId,
                         'mcp-protocol-version': '9999-99-99'
                     }
@@ -656,7 +652,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 const request = new Request('http://localhost:3000/mcp', {
                     method: 'DELETE',
                     headers: {
-                        'Host': 'localhost:3000',
+                        Host: 'localhost:3000',
                         'mcp-session-id': sessionId,
                         'mcp-protocol-version': '9999-99-99'
                     }
@@ -799,18 +795,23 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     storedEvents.set(streamId, events);
                     return eventId;
                 },
-                replayEventsAfter: async (streamId: StreamId, lastEventId: EventId | null, callback) => {
-                    const events = storedEvents.get(streamId) || [];
-                    let replay = lastEventId === null;
-
-                    for (const event of events) {
-                        if (replay) {
-                            await callback(event.id, event.message);
+                replayEventsAfter: async (lastEventId: EventId, { send }): Promise<StreamId> => {
+                    // Find the stream that has this eventId
+                    for (const [streamId, events] of storedEvents) {
+                        let replay = false;
+                        for (const event of events) {
+                            if (replay) {
+                                await send(event.id, event.message);
+                            }
+                            if (event.id === lastEventId) {
+                                replay = true;
+                            }
                         }
-                        if (event.id === lastEventId) {
-                            replay = true;
+                        if (replay) {
+                            return streamId;
                         }
                     }
+                    return 'unknown-stream' as StreamId;
                 }
             };
 
@@ -915,26 +916,18 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
             // Create a simple event store to enable closeSSEStream
             const eventStore: EventStore = {
                 storeEvent: async () => 'event-1' as EventId,
-                replayEventsAfter: async () => {}
+                replayEventsAfter: async () => 'stream-1' as StreamId
             };
 
             const mcpServer = new McpServer({ name: 'test-server', version: '1.0.0' }, { capabilities: { logging: {} } });
 
-            let closeSSEStreamFn: (() => void) | undefined;
-
-            mcpServer.tool(
-                'close-stream',
-                'Closes the SSE stream',
-                {},
-                async (_args, extra): Promise<CallToolResult> => {
-                    closeSSEStreamFn = extra.closeSSEStream;
-                    // Call closeSSEStream after a short delay
-                    setTimeout(() => {
-                        extra.closeSSEStream?.();
-                    }, 50);
-                    return { content: [{ type: 'text', text: 'closing' }] };
-                }
-            );
+            mcpServer.tool('close-stream', 'Closes the SSE stream', {}, async (_args, extra): Promise<CallToolResult> => {
+                // Call closeSSEStream after a short delay
+                setTimeout(() => {
+                    extra.closeSSEStream?.();
+                }, 50);
+                return { content: [{ type: 'text', text: 'closing' }] };
+            });
 
             const transport = new FetchStreamableHTTPServerTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
@@ -976,15 +969,10 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             let hasCloseSSEStream = false;
 
-            mcpServer.tool(
-                'check-callback',
-                'Checks for closeSSEStream callback',
-                {},
-                async (_args, extra): Promise<CallToolResult> => {
-                    hasCloseSSEStream = typeof extra.closeSSEStream === 'function';
-                    return { content: [{ type: 'text', text: 'checked' }] };
-                }
-            );
+            mcpServer.tool('check-callback', 'Checks for closeSSEStream callback', {}, async (_args, extra): Promise<CallToolResult> => {
+                hasCloseSSEStream = typeof extra.closeSSEStream === 'function';
+                return { content: [{ type: 'text', text: 'checked' }] };
+            });
 
             const transport = new FetchStreamableHTTPServerTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
@@ -1020,15 +1008,10 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             let hasCloseSSEStream = false;
 
-            mcpServer.tool(
-                'check-callback',
-                'Checks for closeSSEStream callback',
-                {},
-                async (_args, extra): Promise<CallToolResult> => {
-                    hasCloseSSEStream = typeof extra.closeSSEStream === 'function';
-                    return { content: [{ type: 'text', text: 'checked' }] };
-                }
-            );
+            mcpServer.tool('check-callback', 'Checks for closeSSEStream callback', {}, async (_args, extra): Promise<CallToolResult> => {
+                hasCloseSSEStream = typeof extra.closeSSEStream === 'function';
+                return { content: [{ type: 'text', text: 'checked' }] };
+            });
 
             const transport = new FetchStreamableHTTPServerTransport({
                 sessionIdGenerator: () => crypto.randomUUID()
@@ -1063,7 +1046,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             const { transport } = await createTestTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
-                onsessionclosed: (id) => {
+                onsessionclosed: id => {
                     closedSessionId = id;
                 }
             });
@@ -1126,7 +1109,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             const { transport } = await createTestTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
-                onsessioninitialized: async (id) => {
+                onsessioninitialized: async id => {
                     await new Promise(resolve => setTimeout(resolve, 50));
                     initializedSessionId = id;
                 }
@@ -1146,7 +1129,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             const { transport } = await createTestTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
-                onsessioninitialized: (id) => {
+                onsessioninitialized: id => {
                     initializedSessionId = id;
                 }
             });
@@ -1165,7 +1148,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
 
             const { transport } = await createTestTransport({
                 sessionIdGenerator: () => crypto.randomUUID(),
-                onsessionclosed: async (id) => {
+                onsessionclosed: async id => {
                     await new Promise(resolve => setTimeout(resolve, 50));
                     closedSessionId = id;
                 }
@@ -1198,8 +1181,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1221,8 +1204,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'evil.com'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'evil.com'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1248,8 +1231,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1259,8 +1242,8 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 const request = new Request('http://evil.com/mcp', {
                     method: 'GET',
                     headers: {
-                        'Accept': 'text/event-stream',
-                        'Host': 'evil.com'
+                        Accept: 'text/event-stream',
+                        Host: 'evil.com'
                     }
                 });
 
@@ -1283,9 +1266,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000',
-                        'Origin': 'http://localhost:3000'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000',
+                        Origin: 'http://localhost:3000'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1307,9 +1290,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000',
-                        'Origin': 'http://evil.com'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000',
+                        Origin: 'http://evil.com'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1337,9 +1320,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'evil.com',
-                        'Origin': 'http://evil.com'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'evil.com',
+                        Origin: 'http://evil.com'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1365,9 +1348,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000',
-                        'Origin': 'http://evil.com'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000',
+                        Origin: 'http://evil.com'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1382,9 +1365,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream',
-                        'Host': 'localhost:3000',
-                        'Origin': 'http://localhost:3000'
+                        Accept: 'application/json, text/event-stream',
+                        Host: 'localhost:3000',
+                        Origin: 'http://localhost:3000'
                     },
                     body: JSON.stringify(TEST_MESSAGES.initialize)
                 });
@@ -1517,7 +1500,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
             const sessionStore = createInMemorySessionStore();
 
             // First, initialize using one transport instance
-            const { transport: transport1, mcpServer: mcpServer1 } = await createTestTransport({
+            const { transport: transport1 } = await createTestTransport({
                 sessionIdGenerator: () => 'serverless-session-123',
                 sessionStore
             });
