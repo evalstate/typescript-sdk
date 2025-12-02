@@ -22,7 +22,6 @@ import {
     SUPPORTED_PROTOCOL_VERSIONS,
     DEFAULT_NEGOTIATED_PROTOCOL_VERSION
 } from '../../types.js';
-import { AuthInfo } from '../../server/auth/types.js';
 
 export type StreamId = string;
 export type EventId = string;
@@ -230,13 +229,6 @@ export interface FetchStreamableHTTPServerTransportOptions {
 }
 
 /**
- * Extended Request type that may include auth information
- */
-export interface AuthenticatedRequest extends Request {
-    auth?: AuthInfo;
-}
-
-/**
  * Server transport for Web Standards Streamable HTTP: this implements the MCP Streamable HTTP transport specification
  * using Web Standard APIs (Request, Response, TransformStream).
  *
@@ -244,22 +236,19 @@ export interface AuthenticatedRequest extends Request {
  *
  * ```typescript
  * // Stateful mode - server sets the session ID
- * const statefulTransport = new WSStreamableHTTPServerTransport({
+ * const statefulTransport = new FetchStreamableHTTPServerTransport({
  *   sessionIdGenerator: () => crypto.randomUUID(),
  * });
  *
  * // Stateless mode - explicitly set session ID to undefined
- * const statelessTransport = new WSStreamableHTTPServerTransport({
+ * const statelessTransport = new FetchStreamableHTTPServerTransport({
  *   sessionIdGenerator: undefined,
  * });
  *
- * // Using with Hono.js
+ * // Hono.js usage
  * app.all('/mcp', async (c) => {
  *   return transport.handleRequest(c.req.raw);
  * });
- *
- * // Using with pre-parsed request body
- * const response = await transport.handleRequest(request, await request.json());
  * ```
  *
  * In stateful mode:
@@ -380,7 +369,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
      * Handles an incoming HTTP request, whether GET, POST, or DELETE
      * Returns a Response object (Web Standard)
      */
-    async handleRequest(req: AuthenticatedRequest, parsedBody?: unknown): Promise<Response> {
+    async handleRequest(req: Request): Promise<Response> {
         // Validate request headers for DNS rebinding protection
         const validationError = this.validateRequestHeaders(req);
         if (validationError) {
@@ -389,7 +378,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
 
         switch (req.method) {
             case 'POST':
-                return this.handlePostRequest(req, parsedBody);
+                return this.handlePostRequest(req);
             case 'GET':
                 return this.handleGetRequest(req);
             case 'DELETE':
@@ -627,7 +616,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
     /**
      * Handles POST requests containing JSON-RPC messages
      */
-    private async handlePostRequest(req: AuthenticatedRequest, parsedBody?: unknown): Promise<Response> {
+    private async handlePostRequest(req: Request): Promise<Response> {
         try {
             // Validate the Accept header
             const acceptHeader = req.headers.get('accept');
@@ -645,20 +634,15 @@ export class FetchStreamableHTTPServerTransport implements Transport {
                 return this.createJsonErrorResponse(415, -32000, 'Unsupported Media Type: Content-Type must be application/json');
             }
 
-            const authInfo: AuthInfo | undefined = req.auth;
             const requestInfo: RequestInfo = {
                 headers: Object.fromEntries(req.headers.entries())
             };
 
             let rawMessage;
-            if (parsedBody !== undefined) {
-                rawMessage = parsedBody;
-            } else {
-                try {
-                    rawMessage = await req.json();
-                } catch {
-                    return this.createJsonErrorResponse(400, -32700, 'Parse error: Invalid JSON');
-                }
+            try {
+                rawMessage = await req.json();
+            } catch {
+                return this.createJsonErrorResponse(400, -32700, 'Parse error: Invalid JSON');
             }
 
             let messages: JSONRPCMessage[];
@@ -726,7 +710,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
             if (!hasRequests) {
                 // if it only contains notifications or responses, return 202
                 for (const message of messages) {
-                    this.onmessage?.(message, { authInfo, requestInfo });
+                    this.onmessage?.(message, { requestInfo });
                 }
                 return new Response(null, { status: 202 });
             }
@@ -752,7 +736,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
                     }
 
                     for (const message of messages) {
-                        this.onmessage?.(message, { authInfo, requestInfo });
+                        this.onmessage?.(message, { requestInfo });
                     }
                 });
             }
@@ -819,7 +803,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
                     };
                 }
 
-                this.onmessage?.(message, { authInfo, requestInfo, closeSSEStream, closeStandaloneSSEStream });
+                this.onmessage?.(message, { requestInfo, closeSSEStream, closeStandaloneSSEStream });
             }
             // The server SHOULD NOT close the SSE stream before sending all JSON-RPC responses
             // This will be handled by the send() method when responses are ready

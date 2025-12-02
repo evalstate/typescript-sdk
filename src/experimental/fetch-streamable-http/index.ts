@@ -13,7 +13,6 @@ export {
     type EventStore,
     type EventId,
     type StreamId,
-    type AuthenticatedRequest,
     type SessionStore,
     type SessionState
 } from './fetchStreamableHttpServerTransport.js';

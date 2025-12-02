@@ -30,7 +30,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { McpServer } from '../../server/mcp.js';
-import { FetchStreamableHTTPServerTransport, type AuthenticatedRequest } from '../../experimental/fetch-streamable-http/index.js';
+import { FetchStreamableHTTPServerTransport } from '../../experimental/fetch-streamable-http/index.js';
 import { CallToolResult, GetPromptResult, ReadResourceResult } from '../../types.js';
 import { z } from 'zod';
 
@@ -234,16 +234,25 @@ app.use(
     })
 );
 
-app.all('/mcp', async c => {
-    const request = c.req.raw as AuthenticatedRequest;
+// Example auth middleware (uncomment to enable authentication):
+// app.use('/mcp', async (c, next) => {
+//     const token = c.req.header('Authorization')?.replace('Bearer ', '');
+//     if (token) {
+//         // Validate token and set auth info in context
+//         c.set('auth', { token, clientId: 'example-client' });
+//     }
+//     await next();
+// });
 
+app.all('/mcp', async c => {
     // Check for existing session
-    const sessionId = request.headers.get('mcp-session-id');
+    const sessionId = c.req.header('mcp-session-id');
 
     if (sessionId && transports.has(sessionId)) {
         // Reuse existing transport for this session
         const transport = transports.get(sessionId)!;
-        return transport.handleRequest(request);
+        // Pass auth from context if using auth middleware: { auth: c.get('auth') }
+        return transport.handleRequest(c.req.raw);
     }
 
     // For new sessions or initialization, create new transport and server
@@ -264,7 +273,8 @@ app.all('/mcp', async c => {
 
     await server.connect(transport);
 
-    return transport.handleRequest(request);
+    // Pass auth from context if using auth middleware: { auth: c.get('auth') }
+    return transport.handleRequest(c.req.raw);
 });
 
 // Health check endpoint

@@ -12,13 +12,11 @@ import {
     EventStore,
     EventId,
     StreamId,
-    AuthenticatedRequest,
     SessionStore,
     SessionState
 } from './fetchStreamableHttpServerTransport.js';
 import { McpServer } from '../../server/mcp.js';
 import { CallToolResult, JSONRPCMessage } from '../../types.js';
-import { AuthInfo } from '../../server/auth/types.js';
 import { zodTestMatrix, type ZodMatrixEntry } from '../../__fixtures__/zodTestMatrix.js';
 
 async function getFreePort() {
@@ -269,70 +267,6 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 // Convert Node.js request to Web Standard Request
                 const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
                 const webRequest = await nodeRequestToWebRequest(req, baseUrl);
-
-                // Handle with transport
-                const webResponse = await transport.handleRequest(webRequest as AuthenticatedRequest);
-
-                // Convert Web Standard Response to Node.js response
-                webResponseToNodeResponse(webResponse, res);
-            } catch (error) {
-                console.error('Error handling request:', error);
-                if (!res.headersSent) res.writeHead(500).end();
-            }
-        });
-
-        const baseUrl = await new Promise<URL>(resolve => {
-            // Use specified port or 0 for random port
-            server.listen(config.port ?? 0, '127.0.0.1', () => {
-                const addr = server.address() as AddressInfo;
-                resolve(new URL(`http://127.0.0.1:${addr.port}`));
-            });
-        });
-
-        return { server, transport, mcpServer, baseUrl };
-    }
-
-    /**
-     * Helper to create and start authenticated test HTTP server with MCP setup
-     */
-    async function createTestAuthServer(config: TestServerConfig = { sessionIdGenerator: () => crypto.randomUUID() }): Promise<{
-        server: Server;
-        transport: FetchStreamableHTTPServerTransport;
-        mcpServer: McpServer;
-        baseUrl: URL;
-    }> {
-        const mcpServer = new McpServer({ name: 'test-server', version: '1.0.0' }, { capabilities: { logging: {} } });
-
-        mcpServer.tool(
-            'profile',
-            'A user profile data tool',
-            { active: z.boolean().describe('Profile status') },
-            async ({ active }, { authInfo }): Promise<CallToolResult> => {
-                return { content: [{ type: 'text', text: `${active ? 'Active' : 'Inactive'} profile from token: ${authInfo?.token}!` }] };
-            }
-        );
-
-        const transport = new FetchStreamableHTTPServerTransport({
-            sessionIdGenerator: config.sessionIdGenerator,
-            enableJsonResponse: config.enableJsonResponse ?? false,
-            eventStore: config.eventStore,
-            onsessioninitialized: config.onsessioninitialized,
-            onsessionclosed: config.onsessionclosed
-        });
-
-        await mcpServer.connect(transport);
-
-        const server = createServer(async (req, res) => {
-            try {
-                // Convert Node.js request to Web Standard Request
-                const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-                const webRequest = (await nodeRequestToWebRequest(req, baseUrl)) as AuthenticatedRequest;
-
-                // Add auth info from Authorization header
-                const authHeader = req.headers['authorization'];
-                if (authHeader?.startsWith('Bearer ')) {
-                    webRequest.auth = { token: authHeader.split(' ')[1] } as AuthInfo;
-                }
 
                 // Handle with transport
                 const webResponse = await transport.handleRequest(webRequest);
@@ -1054,105 +988,6 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 expect(response.status).toBe(400);
                 const errorData = await response.json();
                 expectErrorResponse(errorData, -32000, /Bad Request: Unsupported protocol version \(supported versions: .+\)/);
-            });
-        });
-    });
-
-    describe('FetchStreamableHTTPServerTransport with AuthInfo', () => {
-        let server: Server;
-        let transport: FetchStreamableHTTPServerTransport;
-        let baseUrl: URL;
-        let sessionId: string;
-
-        beforeEach(async () => {
-            const result = await createTestAuthServer();
-            server = result.server;
-            transport = result.transport;
-            baseUrl = result.baseUrl;
-        });
-
-        afterEach(async () => {
-            await stopTestServer({ server, transport });
-        });
-
-        async function initializeServer(): Promise<string> {
-            const response = await sendPostRequest(baseUrl, TEST_MESSAGES.initialize);
-
-            expect(response.status).toBe(200);
-            const newSessionId = response.headers.get('mcp-session-id');
-            expect(newSessionId).toBeDefined();
-            return newSessionId as string;
-        }
-
-        it('should call a tool with authInfo', async () => {
-            sessionId = await initializeServer();
-
-            const toolCallMessage: JSONRPCMessage = {
-                jsonrpc: '2.0',
-                method: 'tools/call',
-                params: {
-                    name: 'profile',
-                    arguments: { active: true }
-                },
-                id: 'call-1'
-            };
-
-            const response = await sendPostRequest(baseUrl, toolCallMessage, sessionId, { authorization: 'Bearer test-token' });
-            expect(response.status).toBe(200);
-
-            const text = await readSSEEvent(response);
-            const eventLines = text.split('\n');
-            const dataLine = eventLines.find(line => line.startsWith('data:'));
-            expect(dataLine).toBeDefined();
-
-            const eventData = JSON.parse(dataLine!.substring(5));
-            expect(eventData).toMatchObject({
-                jsonrpc: '2.0',
-                result: {
-                    content: [
-                        {
-                            type: 'text',
-                            text: 'Active profile from token: test-token!'
-                        }
-                    ]
-                },
-                id: 'call-1'
-            });
-        });
-
-        it('should calls tool without authInfo when it is optional', async () => {
-            sessionId = await initializeServer();
-
-            const toolCallMessage: JSONRPCMessage = {
-                jsonrpc: '2.0',
-                method: 'tools/call',
-                params: {
-                    name: 'profile',
-                    arguments: { active: false }
-                },
-                id: 'call-1'
-            };
-
-            const response = await sendPostRequest(baseUrl, toolCallMessage, sessionId);
-            expect(response.status).toBe(200);
-
-            const text = await readSSEEvent(response);
-            const eventLines = text.split('\n');
-            const dataLine = eventLines.find(line => line.startsWith('data:'));
-            expect(dataLine).toBeDefined();
-
-            const eventData = JSON.parse(dataLine!.substring(5));
-            expect(eventData).toMatchObject({
-                jsonrpc: '2.0',
-                result: {
-                    content: [
-                        {
-                            type: 'text',
-                            text: 'Inactive profile from token: undefined!'
-                        }
-                    ]
-                },
-                id: 'call-1'
             });
         });
     });
