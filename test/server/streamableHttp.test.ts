@@ -1,7 +1,8 @@
 import { createServer, type Server, IncomingMessage, ServerResponse } from 'node:http';
 import { AddressInfo, createServer as netCreateServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { EventStore, StreamableHTTPServerTransport, EventId, StreamId } from '../../src/server/streamableHttp.js';
+import { StreamableHTTPServerTransport } from '../../src/server/streamableHttp.js';
+import { EventStore, EventId, StreamId } from '../../src/server/stores.js';
 import { McpServer } from '../../src/server/mcp.js';
 import { CallToolResult, JSONRPCMessage } from '../../src/types.js';
 import { AuthInfo } from '../../src/server/auth/types.js';

@@ -5,14 +5,8 @@
  * without spinning up HTTP servers. This makes tests faster and simpler.
  */
 
-import {
-    FetchStreamableHTTPServerTransport,
-    EventStore,
-    EventId,
-    StreamId,
-    SessionStore,
-    SessionState
-} from '../../../src/experimental/index.js';
+import { FetchStreamableHTTPServerTransport, SessionStore, SessionState } from '../../../src/experimental/index.js';
+import { EventId, EventStore, StreamId } from '../../../src/server/stores.js';
 import { McpServer } from '../../../src/server/mcp.js';
 import { CallToolResult, JSONRPCMessage } from '../../../src/types.js';
 import { zodTestMatrix, type ZodMatrixEntry } from '../../../src/__fixtures__/zodTestMatrix.js';
@@ -799,7 +793,10 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                     storedEvents.set(streamId, events);
                     return eventId;
                 },
-                replayEventsAfter: async (lastEventId: EventId, { send }): Promise<StreamId> => {
+                replayEventsAfter: async (
+                    lastEventId: EventId,
+                    { send }: { send: (eventId: EventId, message: JSONRPCMessage) => Promise<void> }
+                ): Promise<StreamId> => {
                     // Find the stream that has this eventId
                     for (const [streamId, events] of storedEvents) {
                         let replay = false;
