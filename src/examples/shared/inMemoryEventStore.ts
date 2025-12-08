@@ -1,5 +1,5 @@
 import { JSONRPCMessage } from '../../types.js';
-import { EventStore } from '../../server/streamableHttp.js';
+import { EventStore } from '../../server/stores.js';
 
 /**
  * Simple in-memory implementation of the EventStore interface for resumability

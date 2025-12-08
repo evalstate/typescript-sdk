@@ -22,7 +22,7 @@ import express from 'express';
 import cors from 'cors';
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '../../server/mcp.js';
-import { FetchStreamableHTTPServerTransport } from '../../experimental/fetch-streamable-http/index.js';
+import { FetchStreamableHTTPServerTransport } from '../../experimental/index.js';
 import { CallToolResult, GetPromptResult, ReadResourceResult } from '../../types.js';
 import { z } from 'zod';
 

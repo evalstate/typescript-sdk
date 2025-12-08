@@ -12,10 +12,10 @@ import {
     StreamId,
     SessionStore,
     SessionState
-} from './fetchStreamableHttpServerTransport.js';
-import { McpServer } from '../../server/mcp.js';
-import { CallToolResult, JSONRPCMessage } from '../../types.js';
-import { zodTestMatrix, type ZodMatrixEntry } from '../../__fixtures__/zodTestMatrix.js';
+} from '../../../src/experimental/index.js';
+import { McpServer } from '../../../src/server/mcp.js';
+import { CallToolResult, JSONRPCMessage } from '../../../src/types.js';
+import { zodTestMatrix, type ZodMatrixEntry } from '../../../src/__fixtures__/zodTestMatrix.js';
 
 /**
  * Test transport configuration
@@ -574,16 +574,9 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
         });
 
         describe('protocol version header validation', () => {
-            it('should accept requests with matching protocol version', async () => {
-                sessionId = await initializeSession();
-
-                const request = createPostRequest(TEST_MESSAGES.toolsList, sessionId, {
-                    'mcp-protocol-version': '2025-03-26'
-                });
-                const response = await transport.handleRequest(request);
-
-                expect(response.status).toBe(200);
-            });
+            // NOTE: The transport does not enforce version consistency after negotiation.
+            // We only validate that the version header, if present, is in SUPPORTED_PROTOCOL_VERSIONS.
+            // The SDK handles version semantics - the transport just rejects unknown versions.
 
             it('should accept requests without protocol version header', async () => {
                 sessionId = await initializeSession();
@@ -604,6 +597,29 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 expect(response.status).toBe(200);
             });
 
+            it('should accept requests with supported protocol version', async () => {
+                sessionId = await initializeSession();
+
+                const request = createPostRequest(TEST_MESSAGES.toolsList, sessionId, {
+                    'mcp-protocol-version': '2025-03-26'
+                });
+                const response = await transport.handleRequest(request);
+
+                expect(response.status).toBe(200);
+            });
+
+            it('should accept any supported version header regardless of negotiated version', async () => {
+                sessionId = await initializeSession();
+
+                // Use a different but supported version
+                const request = createPostRequest(TEST_MESSAGES.toolsList, sessionId, {
+                    'mcp-protocol-version': '2024-11-05'
+                });
+                const response = await transport.handleRequest(request);
+
+                expect(response.status).toBe(200);
+            });
+
             it('should reject requests with unsupported protocol version', async () => {
                 sessionId = await initializeSession();
 
@@ -617,19 +633,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 expectErrorResponse(body, -32000, /Unsupported protocol version/);
             });
 
-            it('should accept when protocol version differs from negotiated version', async () => {
-                sessionId = await initializeSession();
-
-                // Use a different but supported version
-                const request = createPostRequest(TEST_MESSAGES.toolsList, sessionId, {
-                    'mcp-protocol-version': '2024-11-05'
-                });
-                const response = await transport.handleRequest(request);
-
-                expect(response.status).toBe(200);
-            });
-
-            it('should handle protocol version validation for GET requests', async () => {
+            it('should reject unsupported protocol version on GET requests', async () => {
                 sessionId = await initializeSession();
 
                 const request = new Request('http://localhost:3000/mcp', {
@@ -646,7 +650,7 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
                 expect(response.status).toBe(400);
             });
 
-            it('should handle protocol version validation for DELETE requests', async () => {
+            it('should reject unsupported protocol version on DELETE requests', async () => {
                 sessionId = await initializeSession();
 
                 const request = new Request('http://localhost:3000/mcp', {
@@ -1417,8 +1421,6 @@ describe.each(zodTestMatrix)('$zodVersionLabel', (entry: ZodMatrixEntry) => {
             const savedSession = await sessionStore.get('test-session-123');
             expect(savedSession).toBeDefined();
             expect(savedSession?.initialized).toBe(true);
-            expect(savedSession?.protocolVersion).toBeDefined();
-            expect(savedSession?.createdAt).toBeGreaterThan(0);
 
             await transport.close();
         });

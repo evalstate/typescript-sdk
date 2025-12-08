@@ -12,4 +12,5 @@
  */
 
 export * from './tasks/index.js';
-export * from './fetch-streamable-http/index.js';
+export * from './stores.js';
+export * from './fetchStreamableHttpServerTransport.js';

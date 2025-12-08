@@ -8,7 +8,9 @@
  * @experimental
  */
 
-import { Transport } from '../../shared/transport.js';
+import { Transport } from '../shared/transport.js';
+import { EventStore } from '../server/stores.js';
+import { SessionStore } from './stores.js';
 import {
     MessageExtraInfo,
     RequestInfo,
@@ -19,105 +21,8 @@ import {
     JSONRPCMessage,
     JSONRPCMessageSchema,
     RequestId,
-    SUPPORTED_PROTOCOL_VERSIONS,
-    DEFAULT_NEGOTIATED_PROTOCOL_VERSION
-} from '../../types.js';
-
-export type StreamId = string;
-export type EventId = string;
-
-/**
- * Interface for resumability support via event storage
- */
-export interface EventStore {
-    /**
-     * Stores an event for later retrieval
-     * @param streamId ID of the stream the event belongs to
-     * @param message The JSON-RPC message to store
-     * @returns The generated event ID for the stored event
-     */
-    storeEvent(streamId: StreamId, message: JSONRPCMessage): Promise<EventId>;
-
-    /**
-     * Get the stream ID associated with a given event ID.
-     * @param eventId The event ID to look up
-     * @returns The stream ID, or undefined if not found
-     *
-     * Optional: If not provided, the SDK will use the streamId returned by
-     * replayEventsAfter for stream mapping.
-     */
-    getStreamIdForEventId?(eventId: EventId): Promise<StreamId | undefined>;
-
-    replayEventsAfter(
-        lastEventId: EventId,
-        {
-            send
-        }: {
-            send: (eventId: EventId, message: JSONRPCMessage) => Promise<void>;
-        }
-    ): Promise<StreamId>;
-}
-
-/**
- * Session state that can be persisted externally for serverless deployments.
- */
-export interface SessionState {
-    /** Whether the session has completed initialization */
-    initialized: boolean;
-    /** The negotiated protocol version */
-    protocolVersion: string;
-    /** Timestamp when the session was created */
-    createdAt: number;
-}
-
-/**
- * Interface for session storage in distributed/serverless deployments.
- *
- * In serverless environments (Lambda, Vercel, Cloudflare Workers), each request
- * may be handled by a different instance with no shared memory. The SessionStore
- * allows session state to be persisted externally (e.g., Redis, DynamoDB, KV).
- *
- * @example
- * ```typescript
- * // Cloudflare KV implementation
- * class KVSessionStore implements SessionStore {
- *   constructor(private kv: KVNamespace) {}
- *
- *   async get(sessionId: string) {
- *     return this.kv.get(`session:${sessionId}`, 'json');
- *   }
- *   async save(sessionId: string, state: SessionState) {
- *     await this.kv.put(`session:${sessionId}`, JSON.stringify(state), { expirationTtl: 3600 });
- *   }
- *   async delete(sessionId: string) {
- *     await this.kv.delete(`session:${sessionId}`);
- *   }
- * }
- * ```
- */
-export interface SessionStore {
-    /**
-     * Retrieve session state by ID.
-     * @param sessionId The session ID to look up
-     * @returns The session state, or undefined if not found
-     */
-    get(sessionId: string): Promise<SessionState | undefined>;
-
-    /**
-     * Save session state.
-     * Called when a session is initialized or updated.
-     * @param sessionId The session ID
-     * @param state The session state to persist
-     */
-    save(sessionId: string, state: SessionState): Promise<void>;
-
-    /**
-     * Delete session state.
-     * Called when a session is explicitly closed via DELETE request.
-     * @param sessionId The session ID to delete
-     */
-    delete(sessionId: string): Promise<void>;
-}
+    SUPPORTED_PROTOCOL_VERSIONS
+} from '../types.js';
 
 /**
  * Internal stream mapping for managing SSE connections
@@ -211,19 +116,6 @@ export interface FetchStreamableHTTPServerTransportOptions {
      * to work across multiple serverless function invocations or instances.
      *
      * If not provided, session state is kept in-memory (single-instance mode).
-     *
-     * @example
-     * ```typescript
-     * // Redis session store
-     * const transport = new FetchStreamableHTTPServerTransport({
-     *   sessionIdGenerator: () => crypto.randomUUID(),
-     *   sessionStore: {
-     *     get: async (id) => redis.get(`session:${id}`),
-     *     save: async (id, state) => redis.set(`session:${id}`, state, 'EX', 3600),
-     *     delete: async (id) => redis.del(`session:${id}`)
-     *   }
-     * });
-     * ```
      */
     sessionStore?: SessionStore;
 }
@@ -675,11 +567,8 @@ export class FetchStreamableHTTPServerTransport implements Transport {
 
                 // Persist session state to external store if configured
                 if (this.sessionId && this._sessionStore) {
-                    const protocolVersion = req.headers.get('mcp-protocol-version') ?? DEFAULT_NEGOTIATED_PROTOCOL_VERSION;
                     await this._sessionStore.save(this.sessionId, {
-                        initialized: true,
-                        protocolVersion,
-                        createdAt: Date.now()
+                        initialized: true
                     });
                 }
 
@@ -886,14 +775,27 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         return undefined;
     }
 
+    /**
+     * Validates the MCP-Protocol-Version header on incoming requests.
+     *
+     * This performs a simple check: if a version header is present, it must be
+     * in the SUPPORTED_PROTOCOL_VERSIONS list. We do not track the negotiated
+     * version or enforce version consistency across requests - the SDK handles
+     * version negotiation during initialization, and we simply reject any
+     * explicitly unsupported versions.
+     *
+     * - Header present and supported: Accept
+     * - Header present and unsupported: 400 Bad Request
+     * - Header missing: Accept (version validation is optional)
+     */
     private validateProtocolVersion(req: Request): Response | undefined {
-        const protocolVersion = req.headers.get('mcp-protocol-version') ?? DEFAULT_NEGOTIATED_PROTOCOL_VERSION;
+        const protocolVersion = req.headers.get('mcp-protocol-version');
 
-        if (!SUPPORTED_PROTOCOL_VERSIONS.includes(protocolVersion)) {
+        if (protocolVersion !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(protocolVersion)) {
             return this.createJsonErrorResponse(
                 400,
                 -32000,
-                `Bad Request: Unsupported protocol version (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')})`
+                `Bad Request: Unsupported protocol version: ${protocolVersion} (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')})`
             );
         }
         return undefined;

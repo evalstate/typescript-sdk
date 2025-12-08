@@ -18,42 +18,9 @@ import contentType from 'content-type';
 import { randomUUID } from 'node:crypto';
 import { AuthInfo } from './auth/types.js';
 
+import { EventStore } from './stores.js';
+
 const MAXIMUM_MESSAGE_SIZE = '4mb';
-
-export type StreamId = string;
-export type EventId = string;
-
-/**
- * Interface for resumability support via event storage
- */
-export interface EventStore {
-    /**
-     * Stores an event for later retrieval
-     * @param streamId ID of the stream the event belongs to
-     * @param message The JSON-RPC message to store
-     * @returns The generated event ID for the stored event
-     */
-    storeEvent(streamId: StreamId, message: JSONRPCMessage): Promise<EventId>;
-
-    /**
-     * Get the stream ID associated with a given event ID.
-     * @param eventId The event ID to look up
-     * @returns The stream ID, or undefined if not found
-     *
-     * Optional: If not provided, the SDK will use the streamId returned by
-     * replayEventsAfter for stream mapping.
-     */
-    getStreamIdForEventId?(eventId: EventId): Promise<StreamId | undefined>;
-
-    replayEventsAfter(
-        lastEventId: EventId,
-        {
-            send
-        }: {
-            send: (eventId: EventId, message: JSONRPCMessage) => Promise<void>;
-        }
-    ): Promise<StreamId>;
-}
 
 /**
  * Configuration options for StreamableHTTPServerTransport
