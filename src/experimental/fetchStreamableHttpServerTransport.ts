@@ -15,9 +15,9 @@ import {
     MessageExtraInfo,
     RequestInfo,
     isInitializeRequest,
-    isJSONRPCError,
+    isJSONRPCErrorResponse,
     isJSONRPCRequest,
-    isJSONRPCResponse,
+    isJSONRPCResultResponse,
     JSONRPCMessage,
     JSONRPCMessageSchema,
     RequestId,
@@ -841,7 +841,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
 
     async send(message: JSONRPCMessage, options?: { relatedRequestId?: RequestId }): Promise<void> {
         let requestId = options?.relatedRequestId;
-        if (isJSONRPCResponse(message) || isJSONRPCError(message)) {
+        if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
             // If the message is a response, use the request ID from the message
             requestId = message.id;
         }
@@ -851,7 +851,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
         // Those will be sent via dedicated response SSE streams
         if (requestId === undefined) {
             // For standalone SSE streams, we can only send requests and notifications
-            if (isJSONRPCResponse(message) || isJSONRPCError(message)) {
+            if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
                 throw new Error('Cannot send a response on a standalone SSE stream unless resuming a previous client request');
             }
 
@@ -895,7 +895,7 @@ export class FetchStreamableHTTPServerTransport implements Transport {
             this.writeSSEEvent(stream.controller, stream.encoder, message, eventId);
         }
 
-        if (isJSONRPCResponse(message) || isJSONRPCError(message)) {
+        if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
             this._requestResponseMap.set(requestId, message);
             const relatedIds = Array.from(this._requestToStreamMapping.entries())
                 .filter(([_, sid]) => sid === streamId)
